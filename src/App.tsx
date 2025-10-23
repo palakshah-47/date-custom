@@ -16,14 +16,14 @@ import {
 import { useValidation, validateDate } from "@mui/x-date-pickers/validation";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
-import { DemoItem } from "@mui/x-date-pickers/internals/demo";
-import { CalendarToday, Clear } from "@mui/icons-material"; // Import icons// Import icons
+import Tooltip from "@mui/material/Tooltip";
+import { CalendarToday, Clear } from "@mui/icons-material"; // Import icons
 import IconButton from "@mui/material/IconButton";
 import InputAdornment from "@mui/material/InputAdornment";
 
 // CustomDateField component to handle 'd' input, display formatting, and render icons
 function CustomDateField(
-  props: DatePickerFieldProps<Dayjs> & {
+  props: DatePickerFieldProps & {
     clearable?: boolean;
     onClear?: () => void;
   }
@@ -34,9 +34,11 @@ function CustomDateField(
     restOfCustomFieldProps,
     "date"
   );
-  const pickerContext = usePickerContext<Dayjs>();
+  const pickerContext = usePickerContext<Dayjs | null>();
   const placeholder = useParsedFormat();
   const [inputValue, setInputValue] = useInputValue();
+  const inputRef = React.useRef<HTMLInputElement>(null);
+  const shouldMaintainFocusRef = React.useRef(false);
 
   const { hasValidationError } = useValidation({
     value: pickerContext.value,
@@ -45,39 +47,125 @@ function CustomDateField(
     validator: validateDate,
   });
 
+  // Maintain focus after keyboard shortcuts
+  React.useEffect(() => {
+    if (shouldMaintainFocusRef.current) {
+      shouldMaintainFocusRef.current = false;
+      const input = inputRef.current;
+      if (input) {
+        input.focus();
+        input.select();
+      }
+    }
+  }, [inputValue]);
+
   const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const newInputValue = event.target.value;
     setInputValue(newInputValue);
 
-    // Only attempt to parse if it's not the special 'd' character
-    if (newInputValue.toLowerCase() !== "d") {
-      const newValue = dayjs(newInputValue, pickerContext.fieldFormat);
-      pickerContext.setValue(newValue);
-    }
+    // Don't parse or validate while typing - only on blur
+    // This prevents validation errors while the user is still entering the date
   };
 
   const handleBlur = (event: React.FocusEvent<HTMLInputElement>) => {
-    const currentInput = event.target.value;
+    const currentInput = event.target.value.trim();
+    const lower = currentInput.toLowerCase();
 
-    if (currentInput.toLowerCase() === "d") {
+    // Handle 'd' for today
+    if (lower === "d") {
       const today = dayjs();
       pickerContext.setValue(today);
-      setInputValue(createInputValue(today, pickerContext.fieldFormat)); // Update input field to formatted date
-    } else {
-      // Ensure the picker context value is up-to-date even if 'd' wasn't entered
+      setInputValue(createInputValue(today, pickerContext.fieldFormat));
+    }
+    // Handle d1, d2, etc. to add days
+    else if (/^d\d+$/.test(lower)) {
+      const daysToAdd = parseInt(lower.substring(1), 10);
+      const newDate = dayjs().add(daysToAdd, "day");
+      pickerContext.setValue(newDate);
+      setInputValue(createInputValue(newDate, pickerContext.fieldFormat));
+    }
+    // Handle m1, m2, etc. to add months
+    else if (/^m\d+$/.test(lower)) {
+      const monthsToAdd = parseInt(lower.substring(1), 10);
+      const newDate = dayjs().add(monthsToAdd, "month");
+      pickerContext.setValue(newDate);
+      setInputValue(createInputValue(newDate, pickerContext.fieldFormat));
+    }
+    // Handle y1, y2, etc. to add years
+    else if (/^y\d+$/.test(lower)) {
+      const yearsToAdd = parseInt(lower.substring(1), 10);
+      const newDate = dayjs().add(yearsToAdd, "year");
+      pickerContext.setValue(newDate);
+      setInputValue(createInputValue(newDate, pickerContext.fieldFormat));
+    }
+    // Handle short date formats like 4/5
+    else if (/^\d{1,2}\/\d{1,2}$/.test(currentInput)) {
+      const [month, day] = currentInput.split("/");
+      const currentYear = dayjs().year();
+      const newDate = dayjs(`${month.padStart(2, "0")}/${day.padStart(2, "0")}/${currentYear}`, "MM/DD/YYYY");
+      if (newDate.isValid()) {
+        pickerContext.setValue(newDate);
+        setInputValue(createInputValue(newDate, pickerContext.fieldFormat));
+      }
+    }
+    // Normal date parsing
+    else {
       const newValue = dayjs(currentInput, pickerContext.fieldFormat);
       pickerContext.setValue(newValue);
     }
 
     if ((forwardedProps as any).onBlur) {
-      (forwardedProps as any).onBlur(event); // Call original onBlur if it exists
+      (forwardedProps as any).onBlur(event);
     }
   };
 
-  const handleClearClick = () => {
+  const handleClearClick = (event: React.MouseEvent) => {
+    event.preventDefault(); // Prevent blur
     pickerContext.setValue(null);
+    setInputValue("");
     if (onClear) {
       onClear();
+    }
+    // Keep focus in the field after clearing
+    inputRef.current?.focus();
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.ctrlKey && pickerContext.value && dayjs.isDayjs(pickerContext.value)) {
+      let newDate: Dayjs | null = null;
+
+      switch (event.key) {
+        case "ArrowUp":
+          // Ctrl+Up: Add 1 year
+          newDate = pickerContext.value.add(1, "year");
+          event.preventDefault();
+          event.stopPropagation();
+          break;
+        case "ArrowDown":
+          // Ctrl+Down: Subtract 1 year
+          newDate = pickerContext.value.subtract(1, "year");
+          event.preventDefault();
+          event.stopPropagation();
+          break;
+        case "ArrowRight":
+          // Ctrl+Right: Add 1 month
+          newDate = pickerContext.value.add(1, "month");
+          event.preventDefault();
+          event.stopPropagation();
+          break;
+        case "ArrowLeft":
+          // Ctrl+Left: Subtract 1 month
+          newDate = pickerContext.value.subtract(1, "month");
+          event.preventDefault();
+          event.stopPropagation();
+          break;
+      }
+
+      if (newDate) {
+        shouldMaintainFocusRef.current = true;
+        pickerContext.setValue(newDate);
+        setInputValue(createInputValue(newDate, pickerContext.fieldFormat));
+      }
     }
   };
 
@@ -86,14 +174,20 @@ function CustomDateField(
     <InputAdornment position="end">
       {clearable &&
         pickerContext.value && ( // Only show clear icon if clearable and a value exists
-          <IconButton onClick={handleClearClick} edge="end" size="small">
-            <Close fontSize="small" />
+          <IconButton
+            onMouseDown={handleClearClick}
+            edge="end"
+            size="small"
+            tabIndex={-1}
+          >
+            <Clear fontSize="small" />
           </IconButton>
         )}
       <IconButton
         onClick={() => pickerContext.setOpen(true)}
         edge="end"
         size="small"
+        tabIndex={-1}
       >
         <CalendarToday fontSize="small" />
       </IconButton>
@@ -101,30 +195,70 @@ function CustomDateField(
   );
 
   return (
-    <TextField
-      {...forwardedProps} // Spread all forwarded props
-      placeholder={placeholder}
-      value={inputValue}
-      onChange={handleChange}
-      onBlur={handleBlur}
-      error={hasValidationError}
-      focused={pickerContext.open}
-      label={pickerContext.label}
-      name={pickerContext.name}
-      className={pickerContext.rootClassName}
-      sx={pickerContext.rootSx}
-      ref={pickerContext.rootRef}
-      InputProps={{
-        ...(forwardedProps as any).InputProps, // Merge any InputProps from forwardedProps
-        endAdornment: customEndAdornment, // Override/set our custom endAdornment
+    <Tooltip
+      title={
+        <Box sx={{ whiteSpace: "pre-line", fontSize: "14px", padding: "0px" }}>
+          Ctrl+Up/Down - change year
+          {"\n"}
+          Ctrl+Left/Right - change month
+          {"\n"}
+          d - display current date
+          {"\n"}
+          d1 - Add 1 day to the current date
+          {"\n"}
+          m1 - Add 1 month to the current date
+          {"\n"}
+          y1 - Add 1 year to the current date
+        </Box>
+      }
+      placement="bottom-end"
+      arrow={false}
+      slotProps={{
+        tooltip: {
+          sx: {
+            maxWidth: "400px",
+            fontSize: "14px",
+          },
+        },
+        popper: {
+          modifiers: [
+            {
+              name: "offset",
+              options: {
+                offset: [0, 0],
+              },
+            },
+          ],
+        },
       }}
-    />
+    >
+      <TextField
+        {...forwardedProps} // Spread all forwarded props
+        placeholder={placeholder}
+        value={inputValue}
+        onChange={handleChange}
+        onBlur={handleBlur}
+        onKeyDown={handleKeyDown}
+        error={hasValidationError}
+        focused={pickerContext.open}
+        label={pickerContext.label}
+        name={pickerContext.name}
+        className={pickerContext.rootClassName}
+        sx={pickerContext.rootSx}
+        ref={pickerContext.rootRef}
+        inputRef={inputRef}
+        InputProps={{
+          ...(forwardedProps as any).InputProps, // Merge any InputProps from forwardedProps
+          endAdornment: customEndAdornment, // Override/set our custom endAdornment
+        }}
+      />
+    </Tooltip>
   );
 }
 
 // Helper hook to manage input value synchronization with pickerContext
 function useInputValue() {
-  const pickerContext = usePickerContext<Dayjs>();
+  const pickerContext = usePickerContext<Dayjs | null>();
   const [lastValueProp, setLastValueProp] = React.useState<Dayjs | null>(
     pickerContext.value
   );
@@ -160,8 +294,12 @@ function createInputValue(value: Dayjs | null, format: string) {
 }
 
 // Wrapper component to use CustomDateField with DatePicker
-function CustomFieldDatePicker(props: DatePickerProps<Dayjs>) {
-  const { slots, clearable, onClear, ...restProps } = props;
+function CustomFieldDatePicker(props: DatePickerProps & {
+  clearable?: boolean;
+  onClear?: () => void;
+}) {
+  const { slots, slotProps, clearable, onClear, ...restProps } = props;
+  
   return (
     <DatePicker
       slots={{
@@ -169,13 +307,18 @@ function CustomFieldDatePicker(props: DatePickerProps<Dayjs>) {
         field: (fieldProps) => (
           <CustomDateField
             {...fieldProps}
-            clearable={clearable} // Pass clearable to the custom field
-            onClear={onClear} // Pass onClear to the custom field
+            clearable={clearable}
+            onClear={onClear}
           />
         ),
       }}
-      clearable={clearable} // Keep on DatePicker for internal logic if any
-      onClear={onClear} // Keep on DatePicker for internal logic if any
+      slotProps={{
+        ...slotProps,
+        popper: {
+          placement: "bottom",
+          ...slotProps?.popper,
+        },
+      }}
       {...restProps}
     />
   );
@@ -186,16 +329,6 @@ export default function CustomFieldFormat() {
   const [value, setValue] = React.useState<Dayjs | null>(null);
   const [cleared, setCleared] = React.useState<boolean>(false);
 
-  React.useEffect(() => {
-    if (cleared) {
-      const timeout = setTimeout(() => {
-        setCleared(false);
-      }, 1500);
-
-      return () => clearTimeout(timeout);
-    }
-    return () => {};
-  }, [cleared]);
 
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs}>
@@ -206,27 +339,16 @@ export default function CustomFieldFormat() {
           display: "flex",
           justifyContent: "center",
           alignItems: "center",
-          position: "relative",
         }}
       >
-        <DemoItem label="Custom Date Field">
-          <CustomFieldDatePicker
-            sx={{ width: "300px" }}
-            value={value}
-            onChange={(newValue) => setValue(newValue)}
-            onClear={() => setCleared(true)}
-            clearable
-            format="MM-DD-YYYY" // Example format for display
-          />
-        </DemoItem>
-        {cleared && !value && (
-          <Alert
-            sx={{ position: "absolute", bottom: 16, right: 16 }}
-            severity="success"
-          >
-            Field cleared!
-          </Alert>
-        )}
+        <CustomFieldDatePicker
+          sx={{ width: "300px" }}
+          value={value}
+          onChange={(newValue) => setValue(newValue)}
+          onClear={() => setCleared(true)}
+          clearable
+          format="MM/DD/YYYY" // Example format for display
+        />
       </Box>
     </LocalizationProvider>
   );
